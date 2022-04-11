@@ -1,0 +1,502 @@
+---
+title: "Signature Project"
+author: "Alyssa Pyclik"
+output:
+  pdf_document:
+    df_print: paged
+editor_options:
+  chunk_output_type: inline
+---
+Course: DA5030
+
+Instructor: Dr. Schedlbauer
+
+Due date: 12/12/21
+
+Assignment: Signature Project
+
+#### Introduction
+Within the last decade, we have experienced significant advancements in Machine Learning and Artificial Intelligence research methods, which can be explained by the spike in publicly accessible, high quality data. In particular, the implementation of hospital management systems has allowed Machine Learning researchers access to medical data that can be effective for modeling in genotypic associations, clinical trial protocols,  adverse drug reactions, predicting survival, and much more (Shinozaki, 2020). In this prediction analysis, I am using a data set consisting of 299 observations of patients in late stages of heart failure, sourced from the UCI Machine Learning Repository (UCI, 2020). This dataset is derived from medical records collected at the Faisalabad Institute of Cardiology and Allied Hospital (in Faisalabad) and contains clinical information regarding patient information, lifestyle habits, and clinical data measurements, with “death event” as a target feature. The goal for my analysis is to predict death event given the predictive feature variables through the implementation of classifying algorithms k-NN, NaiveBayes, C.50 Decision Trees, and SVM. Prior to model prediction, the raw dataset undergoes normalization, outlier detection, and feature engineering. To evaluate classification performance, the model predictions are validated via the holdout method in addition to calculation of performance metrics including precision, sensitivity, and accuracy. 
+
+*Sources:*
+Shinozaki, A. (2020). Electronic Medical Records and Machine Learning in Approaches to Drug Development. Artificial Intelligence in Oncology Drug Discovery and Development. https://doi.org/10.5772/intechopen.92613
+(UCI Machine Learning Repository: Heart failure clinical records Data Set, 2020)
+
+#### *Libraries*
+```{r message=FALSE, warning=FALSE}
+# package installation statements
+# install.packages("Hmisc")
+# install.packages("dplyr")
+# install.packages("psych")
+# install.packages("class")
+# install.packages("caret")
+# install.packages("e1071")
+# install.packages("kernlab")
+# install.packages("C50")
+# install.packages("irr")
+library(Hmisc) 
+library(dplyr)
+library(psych) 
+library(class)
+library(caret)
+library(e1071)
+library(kernlab)
+library(C50)
+library(irr)
+```
+
+### I. Data Aquisition
+This dataset consists of 299 observations and 13 feature variables. The feature variables are a mix of binary categorical data and continuous numerical variables. Categorical features in the data include binary variables with “1” indicating anaemia, diabetes, or high-blood pressure and gender of the patient. Numerical features represent clinical measurements including levels of CPK, ejection fraction, platelets, serum creatine, and serum sodium in addition to continuous variables age and time. The target variable for prediction is represented by "death event," with 1 representing a dead patient and 0 representing a surviving patient. Prior to analysis, slight changes were made to column names for simplicity. 
+
+```{r message=FALSE, warning=FALSE}
+# reading in downloadable file link
+df <- read.csv(file = "https://drive.google.com/uc?id=1JNSXUlpzLaTbF3r3-W4Bk8kVT9vBuF8M&export=download", header = T)
+# chaning column names 
+names(df)[names(df) == 'DEATH_EVENT'] <- 'death_event'
+names(df)[names(df) == 'creatinine_phosphokinase'] <- 'CPK'
+str(df)
+print(df$death_event)
+```
+
+### II. Data Exploration
+#### Evaluation of distribution & Collinearity
+In order to get a better understanding of the data, I created a new data frame containing only the numerical features in the dataset. In this dataset, there are five numerical features that represent clinical data collected during the patients' follow up period. To visualize the distribution of numerical features, I generated a scatter plot and histogram. These plots show a non-normal distribution of data. To further evaluate the data's distribution, I looked at the df's summary statistics. In terms of patients, age ranges from 40 years old and the largest range of values can be seen in CPK and platelets. Next, I looked at the proportion of death events. For the target feature death event, there are 203 surviving patients and 96 death events, translating to ~32% death events (1) and ~68% surviving (0). This proportion indicates that there is an inbalence in the data, which can lead to overfitting for prediction. To avoid bias in training the models, moving forward I will split my dataset via stratification for testing and training based on death_event.
+
+To look at how the predictive features affect the target variable, I used cor() to evaluate the the relationship between each feature variable and death_event. Using the pairwise correlation values, the features with the most significant correlations include age, ejection fraction, and serum creatinine. These correlation values will help in feature ranking and elimination in the future. 
+
+```{r message=FALSE, warning=FALSE}
+# creating a new df with only continous features for plotting 
+df_num <- as.data.frame(lapply(df[,(names(df) %in% c( "CPK", "ejection_fraction", "platelets", 
+                        "serum_creatinine", "serum_sodium"))], as.numeric))
+# box plot, hist, pairs.panels 
+plot(df_num)
+hist.data.frame(df_num)
+pairs.panels(df_num)
+
+# summary statsistics 
+summary(df_num)
+# frequency of gender and death events
+table(df$sex)
+table(df$death_event)
+# proportion of target variable
+prop.table(table(df$death_event))
+
+# collinearity
+# correlation between each feature vs death_event
+cor(df[-13], df[13])
+```
+
+#### Detection of outliers for numeric features
+To see if there are any outliers present in the data, I applied the z-score approach on all numeric values data set (including time and age), defining outliers as data points more than 3 standard deviations from the mean. The function returned the most outliers in serum_creatinine (6) and CPK (7) and returned no outliers for age and time. High levels of serum creatinine can indicate renal failure and high CPK (level of creatinine phosphokinase in the blood) can indicate heart muscle injury. Because of the context of this data, moving forward I opted to keep the outliers in the data set. This data set is relatively small and for the goal of accurately predicting death event, levels of serum_creatinine and CPK have high correlations to death event and are important predicitve features for heart failure. Eliminating data for in these features could potentially skew the results.
+
+```{r message=FALSE, warning=FALSE}
+# function for outlier detection
+outliers <- function(x) {
+  s <- sd(x)
+  m <- mean(x)
+  z <- (abs((m-x)/s))
+  return (which(z>3)) }
+# outlier data frame
+o_df <- lapply(df_num, outliers)
+print(o_df)
+```
+
+### III. Data Preperation
+#### Identification of missing values/data impution of missing data
+To check if any NA values are present in the data, I used the function any(is.na()), which returned "false", indicating there are no missing values in the data. To simulate data impution, I inserted random NA values in the time and age columns. To do so, I created two random samples of indicies for 5% of the dataset. After replacing the random values with NA, I imputed the NA values by using the average of time variables and age variables to to plug into the new data. To find the average with NA values present, I used the  the ave() function to apply it to all rows in associated column, excluding NA values in the mean(). If the raw data contained NA values in columns with clinical data (ex. CPK, ejection fraction, etc), depending on the amount of values, I would likley impute them by removing them from the data due to the specificity of these values to avoid skewing the data. In age and time, these features are transformed into levels, meaning the newly added variables are less likley to impact final prediction as each level is a range of ages/time. 
+
+```{r message=FALSE, warning=FALSE}
+# checking if the data frame contains any NA values
+any(is.na(df))
+# create a vector of random indicies that will be replaced with NA
+# two sets of indicies to replace random rows in age and time
+set.seed(100)
+na_idx1 <- sample(nrow(df), nrow(df)*.05)
+na_idx2 <- sample(nrow(df), nrow(df)*.05)
+# creating new df with NA values to simulate NA imputation
+na_df <- df
+na_df$time[na_idx1] <- NA
+na_df$age[na_idx2] <- NA
+any(is.na(na_df$age)) # true
+# imputing the values using average age and time values
+ave_age <- ave(na_df$age, FUN =
+  function(x) mean(x, na.rm = TRUE))
+ave_time <- ave(na_df$time, FUN =
+  function(x) mean(x, na.rm = TRUE))
+# converting average age and time NA columns
+na_df$age <- ifelse(is.na(na_df$age), ave_age, na_df$age)
+na_df$time <- ifelse(is.na(na_df$time), ave_time, na_df$time)
+any(is.na(na_df)) # false
+```
+
+#### Feature engineering & Dummy Encoding
+In the raw data, all categorical variables are pre-encoded into binary levels, making age and time the only features that require encoding. To engineer these features, I first used the cut_number() function to divide age and time into three equally sized bins. Using the break values in the bins, I converted the features into levels 0:2. After encoding, I converted the feature class back to integer to keep the classes of variables the same. 
+
+```{r message=FALSE, warning=FALSE}
+# engineering age and time to bins
+age_bins <- cut_number(df$age, 3)
+age_bins
+time_bins <- cut_number(df$time, 3)
+time_bins
+# dummy encoding 
+df$age <- cut(as.numeric(df$age), breaks=c(-Inf, 55, 65, Inf), labels = c(0:2))
+df$time <- cut(as.numeric(df$time), breaks=c(-Inf, 86.3, 183, Inf), labels = c(0:2))
+# converting back to int for analysis
+df$age <- as.integer(as.character(df$age))
+df$time <- as.integer(as.character(df$time))
+
+str(df$age)
+str(df$time)
+
+```
+
+#### Preproccessing: Normalization/Standardization
+In the data set, numerical features (excluding age and time) represent varying ranges of clinical data that have different units of measurements. For example, levels of serum_creatinine are measured in mg/dL with a range of .5 to 9.4, whereas serum_sodium levels are measured in mEq/L, with a range of 114:148. To account for variation in measurements and differing ranges in values, I implemented a min-max normalization function. This method of transformation scales the data so the variables are within 0 to 1. I decided to use the min-max approach because each of the numerical features have extreme differences in range of variables, which can lead to classification issues byway of inappropriately assiging importance to predictors. Un-normalized data can also reduce effectiveness in distance algorithms k-NN and SVM, which I will be using for prediction.
+
+To apply the function, I first created a seperate data frame containing the categorical variables that will remain as is. Next, I applied the normalization function on the numerical data for transformation. The two data frames are merged and the new, normalized, data frame will be used for model training and prediction from this point forward. I also created a sample data entry and normalized the new numerical data. This new sample will be used to test the ability of the models to predict new data.
+
+```{r message=FALSE, warning=FALSE}
+# new df for normalized data
+normalize <- function(x) {
+      return ((x - min(x)) / (max(x) - min(x)))
+}
+# categorical columns
+df_cat <-df[ , !(names(df) %in% c("CPK", "ejection_fraction", "platelets", "serum_creatinine", "serum_sodium"))]
+
+# merging numerical and categorical features 
+df_norm <- cbind(df_num, df_cat)
+
+
+# creating new sample to test for ensemble 
+num_sample <- data.frame(v1=583,v2=38,v3=260000,v4=1.5,v5=136)
+cat_sample <- data.frame(0,0,1,0,0,0,2,1, stringsAsFactors = TRUE)
+names(num_sample) <- names(df_num)
+names(cat_sample) <- names(df_cat)
+
+# combining new num sample to numerical data to normalize appropriately
+df_num <- rbind(df_num, num_sample)
+df_num <- as.data.frame(lapply(df_num, normalize))
+
+# seperating new sample and original data set
+new_sample <- df_num[300, ]
+df_num <- df_num[-300, ]
+
+# merging numerical and categorical features 
+df_norm <- cbind(df_num, df_cat)
+new_sample <- cbind(new_sample, cat_sample)
+```
+
+#### Identification of principal componenents (PCA)
+Using the function prcomp() I created a PCA object to get a better understanding of the variance-covariance relationship of the variables. For the analysis, I used the numerical variables to compute PC's, outputting 5 different principal components. PC1 explains ~26% of total variance, PC2 explains ~21%, PC3 explains ~20%, PC4 explains ~18% and PC5 explains ~16% of total variance. To look at the correlations between features and principal components, I used the function print() to display the results. For the top two principal components, the results show that PC1 is postively correlated with serum_creatinine and PC2 is postively correlated with CPK and serum_sodium. This agrees with the results of our pairwise correlation in which those features observed a high correlation with the target variable.
+
+```{r message=FALSE, warning=FALSE}
+# pca object 
+df.pca <- prcomp(df_norm[1:5], center = TRUE,scale. = TRUE)
+# PC information
+summary(df.pca)
+# featres vs. PC's
+print(df.pca)
+```
+
+### IV. Model Construction
+To predict death_event using the features provided in the dataset, I decided to implement 4 classification algorithms. In my analysis, I use k-NN, NaiveBayes, C.50 Decision Trees, and SVM. Each of these algorithms work well in classification problems and support binary classification, while providing a diverse set of models. I chose to include these algorithms because these models offer a diverse approach for classification prediction in which k-Nearest Neighbors and Support Vector Machines classify based on distance metrics, NaiveBayes classifies based on probability, and C.50 utilizes decision trees for predictions. 
+
+#### Training and Validation Sets
+To create stratified training and testing sets, I used the function createDataPartition() to split the data by 0.8. The models will be trained using 80% of observations and tested on the remaining 20%. For model construction, the target variable death_event is converted to a factor variable. ** bag
+
+```{r message=FALSE, warning=FALSE}
+# training and testing sets: split by 80%
+set.seed(124)
+in_train <- createDataPartition(df_norm$death_event, p = 0.80, list = FALSE)
+train <- df_norm[in_train, ]
+test <- df_norm[-in_train, ]
+train$death_event <- as.factor(train$death_event)
+test$death_event <- as.factor(test$death_event)
+```
+
+#### k-Nearest Neighbors Algorithm 
+The k-NN algorithm utlilzes distance metrics for classification tasks with a user defined k-value. This algorithm works well for this data in which k-NN models work well in small data sets with complicated/unknown relationships among features and target classes. To predict death event, I used the knn() function from the "class" package. To chose a k-value, I used the square root of number of observations (299) to get 17 as an ideal value. To test how the model performs with different k-values, I tuned the k-value parameter with two new k-values. Using the testing set for prediction, I used confusionMatrix() to calculate the accuracy of each model build. Across all models, the accuracy remained the same at 96% accuracy. 
+
+```{r message=FALSE, warning=FALSE}
+# K-nn function: k value=17; sqrt of 299 is ~17
+knn_pred <- class::knn(train = train, test = test,
+                       cl = train$death_event, k = 17)
+# tuning hyperparameters: chaning k-values 
+new_knn_pred <- class::knn(train = train, test = test,
+                       cl = train$death_event, k = 21)
+new_knn_pred2 <- class::knn(train = train, test = test,
+                       cl = train$death_event, k = 25)
+
+# comparing performance: accuracy
+confusionMatrix(data=knn_pred, reference=test$death_event)$overall['Accuracy'] 
+confusionMatrix(data=new_knn_pred, reference=test$death_event)$overall['Accuracy'] 
+knn_acc <- confusionMatrix(data=new_knn_pred2, reference=test$death_event)$overall['Accuracy'] 
+```
+
+#### NaiveBayes
+Naive Bayes is a probability driven algorithm used frequently in classification problems, and works well with binary classification. To build my model, I used the naiveBayes function from the e1071 package and tuned the hyperparamers to improve the model by adding "laplace". Using the trained model to predict death event for the testing set, I calculated the accuracies using the confusion matrix. Both the original and improved model returned a high accuracy of ~98%.
+
+```{r message=FALSE, warning=FALSE}
+# nb model build
+nb_model <- naiveBayes(train, train$death_event)
+# tuning hyperparameters: laplace estimator 
+new_nb_model <- naiveBayes(train, train$death_event, laplace = 1)
+# comparing performance: accuracy
+nb_pred <- predict(nb_model, test)
+new_nb_pred <- predict(new_nb_model, test)
+confusionMatrix(data=nb_pred, reference=test$death_event)$overall['Accuracy'] 
+nb_acc <- confusionMatrix(data=new_nb_pred, reference=test$death_event)$overall['Accuracy'] 
+```
+
+#### C50 Decision Trees
+The C.50 algorithm classifies data using deicsion tree implementation, and is widely used for many types of poblems, including binary classification. This algorithm works well in this data set in which C50 can handle numerical and categorical data, can be used in small datasets, and is considered an all-purpose classifier. To build my model, I trained the model on all features except for the target variable. To improve the model, I added the "trials" parameter to boost the algorithm. I used 10 trials in the first boosted model and 30 in the second to see if accuracy improves. After using the trained models for prediction, the accuracy for the original model is on the lower side, of around ~77% accuracy. In comparison, the boosted models both perform better with a ~84% accuracy.
+
+```{r message=FALSE, warning=FALSE}
+# fitting c50 model
+c50_model <- C5.0(train[-13], train$death_event)
+# tuning hyperparameters: boosting the model by adding 10 trials
+c50_boost <- C5.0(train[-13], train$death_event,
+                         trials = 10)
+c50_boost2 <- C5.0(train[-13], train$death_event,
+                         trials = 30)
+# comparing performance: accuracy
+c50_pred <- predict(c50_model, test) 
+boost_pred <- predict(c50_boost, test)
+boost2_pred <- predict(c50_boost2, test)
+# prediction accuracies
+confusionMatrix(data=c50_pred, reference=test$death_event)$overall['Accuracy'] #0.77
+confusionMatrix(data=boost_pred, reference=test$death_event)$overall['Accuracy'] #0.84
+c50_acc <- confusionMatrix(data=boost2_pred, reference=test$death_event)$overall['Accuracy'] #0.84
+```
+
+#### SVM Model
+To make predictions based on data, the SVM model creates a line or hyperplane in order to seperate classes. This model can be applied to almost any learning task, including classification tasks. For this dataset, I built my SVM model using the ksvm() function from the kernlab package and tuned the kernel type from "vanilladot" to "rbfdot" in order to improve the model accuracy. I then used the trained models to predict death event on the testing data. For both the original model and improved, the accuracy is high at 83%. Moving forward, I will use the kernel type "vanilladot" for this data's prediction. 
+
+```{r message=FALSE, warning=FALSE}
+# building svm model
+svm_model <- ksvm(death_event ~ ., data = train,
+                   kernel = "vanilladot")
+## tuning hyperparameters: changing kernel function
+# chaning the kernel function; train an RBF-based SVM using the ksvm
+new_svm_model <- ksvm(death_event ~ ., data = train,
+                   kernel = "rbfdot")
+# model performance: accuracy 
+svm_pred <- predict(svm_model, test)
+new_svm_pred <- predict(new_svm_model, test)
+confusionMatrix(data=svm_pred, reference=test$death_event)$overall['Accuracy'] #.89
+svm_acc <- confusionMatrix(data=new_svm_pred, reference=test$death_event)$overall['Accuracy'] #.89
+```
+
+### V. Model Evaluation 
+#### Evaluation of fit of models with holdout method
+
+##### Accuracy 
+To compare how accurately the models predict on the testing sets, I used the confusionMatrix calculations from each of the highest performing model fits. In general, all four models returned decent accuracy percentages, with Naive Bayes and k-nn performing the best. Specifically, Naive Bayes predicted test death event with an almost perfect accuracy of 98%.
+```{r message=FALSE, warning=FALSE}
+### Accuracy
+print(knn_acc)  # 1.0
+print(nb_acc) # 1.0
+print(c50_acc) # .88
+print(svm_acc) # .88
+```
+
+##### Precision
+Precision represents the proportion of postive examples that are true postive, measuring how often the model is correct. To calculate the precision metrics, I used the function posPredValue() on each of the models. The models with the highest precision are k-nn and nb, both returning precision values ~1.0. The boosted c50 model returned a precision value of .85 while the SVM model returned a precision of .86. 
+
+```{r message=FALSE, warning=FALSE}
+# Precision
+posPredValue(knn_pred, test$death_event) # .95
+posPredValue(nb_pred, test$death_event) # 1.0
+posPredValue(c50_pred, test$death_event) # 0.85
+posPredValue(svm_pred, test$death_event) # 0.86
+```
+
+##### Recall
+To calculate how complete the model is, or recall, I used the sensitivity() function. The models with the highest recall calculations are k-nn, with 1.0 and Naive Bayes, with 0.97. The SVM model's recall is .88 and the C50 returns a .83 recall value.
+
+```{r message=FALSE, warning=FALSE}
+# Recall
+sensitivity(knn_pred, test$death_event) # 1.0
+sensitivity(nb_pred, test$death_event) # 0.97
+sensitivity(c50_pred, test$death_event) # 0.83
+sensitivity(svm_pred, test$death_event) # 0.88
+```
+
+#### Evaluation with k-fold cross-valdation
+To further evaluate each model's performance, I calculated the k-fold cross validation on each trained model. This approach randomly divides the data into 10 random partitions, or folds, to generate a set of predictions using the specified model. To find the CV values for each model, I constructed a cross-validation function and applied it to each fold using lapply.
+
+```{r message=FALSE, warning=FALSE}
+# creating folds w/ k = 10
+folds <- createFolds(df_norm$death_event, k = 10)
+# k-NN
+cv_knn <- lapply(folds, function(x) {
+    train <- df_norm[-x, ]
+    train_labels <- as.factor(train$death_event)
+    test <- df_norm[x, ]
+    knn_pred <- class::knn(train = train, test = test,
+                           cl = train_labels, k = 17)
+    knn_actual <- test$death_event
+    kappa <- kappa2(data.frame(knn_actual, knn_pred))$value
+    return(kappa)
+  })
+
+# NaiveBayes
+cv_nb <- lapply(folds, function(x) {
+    train <- df_norm[-x, ]
+    train_labels <- as.factor(train$death_event)
+    test <- df_norm[x, ]
+    nb_model <- naiveBayes(train, train_labels)
+    nb_pred <- predict(nb_model, test)
+    nb_actual <- test$death_event
+    kappa <- kappa2(data.frame(nb_actual, nb_pred))$value
+    return(kappa)
+  })
+
+# C50 
+cv_c50 <- lapply(folds, function(x) {
+    train <- df_norm[-x, ]
+    train_labels <- as.factor(train$death_event)
+    test <- df_norm[x, ]
+    c50_model <- C5.0(train[-13], train_labels)
+    c50_pred <- predict(c50_model, test)
+    c50_actual <- as.factor(test$death_event)
+    kappa <- kappa2(data.frame(c50_actual, c50_pred))$value
+    return(kappa)
+})
+
+# SVM Model
+cv_svm <- lapply(folds, function(x) {
+    train <- df_norm[-x, ]
+    test <- df_norm[x, ]
+    train$death_event <- as.factor(train$death_event)
+    test$death_event <- as.factor(test$death_event)
+    svm_model <- ksvm(death_event ~ ., data = train,
+                   kernel = "vanilladot")
+    svm_pred <- predict(svm_model, test)
+    svm_actual <- as.factor(test$death_event)
+    kappa <- kappa2(data.frame(svm_actual, svm_pred))$value
+    return(kappa)
+  })
+```
+
+##### Cross Validation Results
+To get the kappa statistic, I unlisted the CV function outputs and calculated the mean. The cross-validation results returned the highest kappa statistic for the k-nn and Naive Bayes models, .92 and .96, respectively. The high kappa statistic for these models indicate these models perform much better than random chance. In comparision, the C50 and SVM models return much lower statistics, .42 and .51, indicating that these models are less accurate models for prediction of death event. 
+
+```{r message=FALSE, warning=FALSE}
+# Kappa Statistics:
+mean(unlist(cv_knn)) # .92
+mean(unlist(cv_nb)) # .96
+mean(unlist(cv_c50)) # .30
+mean(unlist(cv_svm)) # .51
+```
+
+### VI. Improving Model Performance
+
+#### Bagging with homogeneous learners
+To improve the models, I created a function that implements the bagging approach on each model. Bagging calculates the mean accuracy value on each prediction model by using a subset of bootstrap samples from the training set to train the model multiple times. The function is structured similarly to the cross validation function and returns a list of accuracies for each sub-model. To create the bootstrap index, I used replicate() to sample 20 different subgroups of the training data set. I sampled these indicies using the sample() function, splitting the data the same way as the original training sets, with 80% in training and 20% in testing. After averaging the results, each model returned accuracies that were marginally higher, but not significantly increased. 
+
+```{r message=FALSE, warning=FALSE}
+# bagging index: 10 subsample indicies of training set for homogeneous bagging
+bag_idx <- replicate(20, sample(nrow(train), nrow(train)*0.80), simplify=F)
+# knn bagging 
+knn_bag <- lapply(bag_idx, function(x) {
+    train <- train[x, ]
+    test <- test[-x, ]
+    knn_pred <- class::knn(train = train, test = test,
+                       cl = train$death_event, k = 17)
+    accuracy <- confusionMatrix(data=knn_pred, reference=test$death_event)$overall['Accuracy']
+    return(accuracy)
+  })
+# nb bagging
+nb_bag <- lapply(bag_idx, function(x) {
+    train <- train[x, ]
+    test <- test[-x, ]
+    nb_model <- naiveBayes(train, train$death_event)
+    nb_pred <- predict(nb_model, test)
+    accuracy <- confusionMatrix(data=nb_pred, reference=test$death_event)$overall['Accuracy']
+    return(accuracy)
+  })
+# c50 bagging
+c50_bag <- lapply(bag_idx, function(x) {
+    train <- train[x, ]
+    test <- test[-x, ]
+    c50_model <- C5.0(train[-13], train$death_event, trials = 30)
+    c50_pred <- predict(c50_model, test)
+    c50_actual <- as.factor(test$death_event)
+    accuracy <- confusionMatrix(data=c50_pred, reference=test$death_event)$overall['Accuracy']
+    return(accuracy)
+  })
+# svm bagging 
+svm_bag <- lapply(bag_idx, function(x) {
+    train <- train[x, ]
+    test <- test[-x, ]
+    svm_model <- ksvm(death_event ~ ., data = train,
+                   kernel = "vanilladot")
+    svm_pred <- predict(svm_model, train)
+    accuracy <- confusionMatrix(data=svm_pred, reference=train$death_event)$overall['Accuracy']
+    return(accuracy)
+  })
+
+# New Accuracies
+mean(unlist(knn_bag)) # .97
+mean(unlist(nb_bag)) # .97
+mean(unlist(c50_bag)) # .75
+mean(unlist(svm_bag)) # .83
+```
+
+#### Ensemble model
+This model is a simple ensemble that combines all four learners to predict "death_event" when given a new sample of data. To buld this model, I built a function that inputs a new sample of heart failure data and predicts a death event using predictions from each algorithm. Each of the predictions were converted to numeric values and combined into one vector. If all models agree on a prediction, the prediction remains as is. If not, the model uses the prediction of the  model fit with the highest accuracy, which is the Naive Bayes algorithm.
+
+```{r message=FALSE, warning=FALSE}
+predictDeath_event <- function(x) {
+  knn_pred <- as.numeric(as.character(class::knn(train = train, test = x,
+                       cl = train$death_event, k = 17)))
+  nb_pred <- as.numeric(as.character(predict(nb_model, x))) 
+  c50_pred <- as.numeric(as.character(predict(c50_model, x)))
+  svm_pred <- as.numeric(as.character(predict(svm_model, x)))
+  all_pred <- c(knn_pred, nb_pred, c50_pred, svm_pred)
+  if(length(unique(all_pred)) == 1){
+    pred <- nb_pred
+  } else {
+      pred <- knn_pred }
+  return (pred) }
+```
+
+#### Using Ensemble model for prediction
+To test the model ensemble, I created a sample data entry to use for prediction. This sample set is normalized and the new data entry is in a new df. Using the new data, the ensemble model predicted the death event to be 0, or a surviving patient.
+
+```{r message=FALSE, warning=FALSE}
+# using rbind to bind the new sample --> this converts all new samples to the same class type
+new_sample <- rbind(df_norm, new_sample)
+new_sample <- new_sample[300, ]
+# Ensemble Model Prediction:
+predictDeath_event(new_sample) # 0
+```
+
+#### Comparing Ensemble to Individual Models
+When plugging in the new sample to each model, all four models agree on prediction for the new sample, "0" or a surviving patient.
+```{r message=FALSE, warning=FALSE}
+# Comparing Models vs Ensemble
+class::knn(train = train, test = new_sample, cl = train$death_event, k = 17) # 0
+predict(nb_model, new_sample) # 0
+predict(c50_model, new_sample)  # 0
+predict(svm_model, new_sample) # 0 
+```
+
+### VII. Comparison of models and interpretation
+In the table below, I compared each models perforance metrics. Each of the performance metrics agree with eachother in that the Naive Bayes model is the best performing model for predicting death rate given the feature variables. Although the performance evaluation calculations return high accuracy across the models, it is important to note that this could be attributed to the relatively small data set or the imbalenced proportion of death event versus surviving event, which could induce biases to the data regardless of normalization metrics.
+
+Model      | Accuracy   | Precision  | Recall     | Cross-Valid
+---------- | ---------- | ---------- | ---------- | ----------
+k-NN       | 1.0        | 0.95        | 1.0        | 0.92
+NaiveBayes | 1.0        | 1.0         | 0.97       | 0.96
+C50        | 0.77       | 0.85       | 0.83       | 0.30
+SVM        | 0.81       | 0.86       | 0.88       | 0.51
+
+
+
+
+
+
+
+
